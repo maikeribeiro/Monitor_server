@@ -45,6 +45,7 @@ SERVICE_START_CMD = os.environ.get(
 )
 SERVICE_WORKDIR = os.environ.get("SERVICE_WORKDIR", "/home/sistemame/SistemaME")
 GIT_PULL_DIR = os.environ.get("GIT_PULL_DIR", "/home/sistemame/SistemaME")
+GIT_PULL_SCRIPT = os.environ.get("GIT_PULL_SCRIPT", "/home/sistemame/atualizar.sh")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
@@ -487,8 +488,8 @@ def service_restart():
 
 @app.route("/deploy/pull", methods=["POST"])
 def deploy_pull():
-    # Run git pull in repo as service user
-    code, out = _run_as_service_user(["git", "pull"], cwd=GIT_PULL_DIR)
+    # Run atualizar.sh as service user
+    code, out = _run_as_service_user(["bash", "-lc", GIT_PULL_SCRIPT], cwd=GIT_PULL_DIR)
     return jsonify({"ok": code == 0, "output": out, "code": code})
 
 
