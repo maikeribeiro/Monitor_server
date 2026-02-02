@@ -34,7 +34,6 @@ except Exception:  # pragma: no cover - handled at runtime
 APP_ROOT = pathlib.Path(__file__).resolve().parent
 BASE_BROWSE_PATH = pathlib.Path(os.environ.get("BROWSE_ROOT", "/home")).resolve()
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
-ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN")
 SERVICE_NAME = os.environ.get("SERVICE_NAME", "SistemaME")
 SERVICE_MATCH = os.environ.get("SERVICE_MATCH", "/home/sistemame/SistemaME/venv/bin/gunicorn")
 SERVICE_USER = os.environ.get("SERVICE_USER", "sistemame")
@@ -54,18 +53,6 @@ app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24))
 AUTH_STORE = pathlib.Path(
     os.environ.get("AUTH_STORE", str(APP_ROOT / ".credentials.json"))
 ).resolve()
-
-
-@app.before_request
-def require_token() -> None:
-    if not ADMIN_TOKEN:
-        return
-    if request.endpoint in {"static", "login", "setup", "logout", "healthz"}:
-        return
-    # Simple token check via header or query param
-    token = request.headers.get("X-Admin-Token") or request.args.get("token")
-    if token != ADMIN_TOKEN:
-        abort(401)
 
 
 def _auth_payload() -> dict | None:
