@@ -1,0 +1,255 @@
+{% extends "layout.html" %}
+{% set title = "Status" %}
+
+{% block content %}
+<section class="panel">
+  <h1>Status do servidor</h1>
+  <div class="grid">
+    <div class="card">
+      <div class="label">Hostname</div>
+      <div class="value" id="hostname">{{ info.hostname }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Sistema</div>
+      <div class="value" id="platform">{{ info.platform }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Python</div>
+      <div class="value" id="python">{{ info.python }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Horário</div>
+      <div class="value" id="time">{{ info.time.strftime('%Y-%m-%d %H:%M:%S') }}</div>
+    </div>
+  </div>
+
+  {% if psutil_available %}
+  <div class="grid">
+    <div class="card">
+      <div class="label">Uptime (s)</div>
+      <div class="value" id="uptime">{{ info.uptime_seconds }}</div>
+    </div>
+    <div class="card gauge-card">
+      <div class="label">CPU</div>
+      <div class="gauge gauge-cpu" id="cpu-gauge" style="--value: {{ info.cpu_percent or 0 }};">
+        <div class="gauge-inner">
+          <div class="gauge-value" id="cpu-value">{{ info.cpu_percent or 0 }}%</div>
+          <div class="gauge-sub">uso</div>
+        </div>
+      </div>
+    </div>
+    <div class="card gauge-card">
+      <div class="label">Memória</div>
+      <div class="gauge gauge-mem" id="mem-gauge" style="--value: {{ info.mem.percent if info.mem else 0 }};">
+        <div class="gauge-inner">
+          <div class="gauge-value" id="mem-value">{{ info.mem.percent if info.mem else 0 }}%</div>
+          <div class="gauge-sub" id="mem-sub">{{ info.mem.used_h }} / {{ info.mem.total_h }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="card gauge-card">
+      <div class="label">Disco</div>
+      <div class="gauge gauge-disk" id="disk-gauge" style="--value: {{ info.disk.percent if info.disk else 0 }};">
+        <div class="gauge-inner">
+          <div class="gauge-value" id="disk-value">{{ info.disk.percent if info.disk else 0 }}%</div>
+          <div class="gauge-sub" id="disk-sub">{{ info.disk.used_h }} / {{ info.disk.total_h }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <div class="label">Serviço</div>
+      <div class="value" id="service-name">SistemaME</div>
+      <div class="gauge-sub" id="service-status">Status: desconhecido</div>
+      <div class="gauge-sub" id="service-meta">PIDs: -</div>
+      <div class="actions">
+        <button class="btn" type="button" id="service-start">Iniciar</button>
+        <button class="btn" type="button" id="service-stop">Parar</button>
+        <button class="btn" type="button" id="service-restart">Reiniciar</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="label">Deploy</div>
+      <div class="value">Git</div>
+      <div class="gauge-sub" id="deploy-output">Pronto</div>
+      <div class="actions">
+        <button class="btn" type="button" id="git-pull">Git Pull</button>
+      </div>
+    </div>
+  </div>
+  <div class="card terminal-card">
+    <div class="label">Terminal</div>
+    <div class="terminal-header">
+      <span class="terminal-title">Status e retorno</span>
+      <button class="btn btn-secondary" type="button" id="terminal-clear">Limpar</button>
+    </div>
+    <pre class="terminal" id="terminal-output">Pronto para comandos.</pre>
+  </div>
+  {% else %}
+  <p class="warn">psutil não disponível. Instale para métricas de CPU/Memória/Disco.</p>
+  {% endif %}
+</section>
+
+<script>
+  const token = new URLSearchParams(window.location.search).get("token");
+  function withToken(url) {
+    if (!token) return url;
+    const u = new URL(url, window.location.origin);
+    u.searchParams.set("token", token);
+    return u.toString();
+  }
+
+  const fmt = new Intl.DateTimeFormat("pt-BR", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
+  function setGauge(el, value) {
+    if (!el) return;
+    el.style.setProperty("--value", Math.max(0, Math.min(100, value)));
+  }
+
+  function appendTerminal(text) {
+    const out = document.getElementById("terminal-output");
+    if (!out) return;
+    const ts = new Date().toLocaleTimeString("pt-BR");
+    out.textContent += `\n[${ts}] ${text}`;
+    out.scrollTop = out.scrollHeight;
+  }
+
+  async function refreshStatus() {
+    const res = await fetch(withToken("/api/status"));
+    if (!res.ok) return;
+    const data = await res.json();
+
+    const timeEl = document.getElementById("time");
+    const hostnameEl = document.getElementById("hostname");
+    const platformEl = document.getElementById("platform");
+    const pythonEl = document.getElementById("python");
+    const uptimeEl = document.getElementById("uptime");
+    const cpuValueEl = document.getElementById("cpu-value");
+    const memValueEl = document.getElementById("mem-value");
+    const memSubEl = document.getElementById("mem-sub");
+    const diskValueEl = document.getElementById("disk-value");
+    const diskSubEl = document.getElementById("disk-sub");
+
+    if (hostnameEl) hostnameEl.textContent = data.hostname || "-";
+    if (platformEl) platformEl.textContent = data.platform || "-";
+    if (pythonEl) pythonEl.textContent = data.python || "-";
+    if (timeEl) timeEl.textContent = data.time ? fmt.format(new Date(data.time)) : "-";
+    if (uptimeEl && data.uptime_seconds !== null) uptimeEl.textContent = data.uptime_seconds;
+
+    const cpu = Number(data.cpu_percent ?? 0);
+    const mem = Number(data.mem?.percent ?? 0);
+    const disk = Number(data.disk?.percent ?? 0);
+
+    setGauge(document.getElementById("cpu-gauge"), cpu);
+    setGauge(document.getElementById("mem-gauge"), mem);
+    setGauge(document.getElementById("disk-gauge"), disk);
+
+    if (cpuValueEl) cpuValueEl.textContent = `${cpu}%`;
+    if (memValueEl) memValueEl.textContent = `${mem}%`;
+    if (diskValueEl) diskValueEl.textContent = `${disk}%`;
+    if (memSubEl && data.mem) memSubEl.textContent = `${data.mem.used_h} / ${data.mem.total_h}`;
+    if (diskSubEl && data.disk) diskSubEl.textContent = `${data.disk.used_h} / ${data.disk.total_h}`;
+
+    const serviceRes = await fetch(withToken("/api/service"));
+    if (serviceRes.ok) {
+      const svc = await serviceRes.json();
+      const nameEl = document.getElementById("service-name");
+      const statusEl = document.getElementById("service-status");
+      const metaEl = document.getElementById("service-meta");
+      const stopBtn = document.getElementById("service-stop");
+      const startBtn = document.getElementById("service-start");
+      const restartBtn = document.getElementById("service-restart");
+      if (nameEl) nameEl.textContent = svc.name || "Serviço";
+      if (statusEl) statusEl.textContent = svc.running ? "Status: rodando" : "Status: parado";
+      if (metaEl) metaEl.textContent = svc.count ? `PIDs: ${svc.pids.join(", ")}` : "PIDs: -";
+      if (stopBtn) stopBtn.disabled = !svc.running;
+      if (startBtn) startBtn.disabled = svc.running;
+      if (restartBtn) restartBtn.disabled = !svc.running;
+    }
+  }
+
+  setInterval(refreshStatus, 3000);
+
+  const stopBtn = document.getElementById("service-stop");
+  if (stopBtn) {
+    stopBtn.addEventListener("click", async () => {
+      const ok = window.confirm("Deseja parar o serviço?");
+      if (!ok) return;
+      const res = await fetch(withToken("/service/stop"), { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        appendTerminal(`Parar serviço: ${data.message || "ok"} (PIDs: ${data.count ?? 0})`);
+        refreshStatus();
+      } else {
+        window.alert("Não foi possível parar o serviço.");
+      }
+    });
+  }
+
+  const startBtn = document.getElementById("service-start");
+  if (startBtn) {
+    startBtn.addEventListener("click", async () => {
+      const ok = window.confirm("Deseja iniciar o serviço?");
+      if (!ok) return;
+      const res = await fetch(withToken("/service/start"), { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        appendTerminal(`Iniciar serviço: ${data.started ? "ok" : "falhou"} ${data.output ? "- " + data.output : ""}`);
+        refreshStatus();
+      } else {
+        window.alert("Não foi possível iniciar o serviço.");
+      }
+    });
+  }
+
+  const restartBtn = document.getElementById("service-restart");
+  if (restartBtn) {
+    restartBtn.addEventListener("click", async () => {
+      const ok = window.confirm("Deseja reiniciar o serviço?");
+      if (!ok) return;
+      const res = await fetch(withToken("/service/restart"), { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        appendTerminal(`Reiniciar serviço: ${data.restarted ? "ok" : "falhou"} ${data.output ? "- " + data.output : ""}`);
+        refreshStatus();
+      } else {
+        window.alert("Não foi possível reiniciar o serviço.");
+      }
+    });
+  }
+
+  const pullBtn = document.getElementById("git-pull");
+  if (pullBtn) {
+    pullBtn.addEventListener("click", async () => {
+      const ok = window.confirm("Executar git pull agora?");
+      if (!ok) return;
+      const outEl = document.getElementById("deploy-output");
+      if (outEl) outEl.textContent = "Executando git pull...";
+      const res = await fetch(withToken("/deploy/pull"), { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        if (outEl) outEl.textContent = data.output || (data.ok ? "Atualizado" : "Falhou");
+        appendTerminal(`Git pull: ${data.ok ? "ok" : "falhou"} ${data.output ? "- " + data.output : ""}`);
+      } else if (outEl) {
+        outEl.textContent = "Falha ao executar git pull.";
+      }
+    });
+  }
+
+  const clearBtn = document.getElementById("terminal-clear");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", () => {
+      const out = document.getElementById("terminal-output");
+      if (out) out.textContent = "Limpo.";
+    });
+  }
+</script>
+{% endblock %}

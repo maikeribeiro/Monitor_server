@@ -1,0 +1,99 @@
+{% extends "layout.html" %}
+{% set title = "Editar CSV" %}
+
+{% block content %}
+<section class="panel">
+  <h1>Editar CSV</h1>
+  <div class="path">Arquivo: {{ rel_path }}</div>
+
+  <div class="csv-toolbar">
+    <button class="btn" type="button" id="add-row">Adicionar linha</button>
+    <button class="btn" type="button" id="add-col">Adicionar coluna</button>
+  </div>
+
+  <form class="csv-form" method="post" action="{{ url_for('csv_edit') }}" id="csv-form">
+    <input type="hidden" name="path" value="{{ rel_path }}" />
+    <input type="hidden" name="header" id="csv-header" />
+    <textarea name="rows" id="csv-rows" rows="6" hidden></textarea>
+
+    <div class="csv-table">
+      <table class="table" id="csv-table">
+        <thead>
+          <tr>
+            {% for h in header %}
+              <th contenteditable="true">{{ h }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in data %}
+          <tr>
+            {% for cell in row %}
+              <td contenteditable="true">{{ cell }}</td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="actions">
+      <button class="btn" type="submit">Salvar</button>
+      <a class="btn" href="{{ url_for('browse') }}">Voltar</a>
+    </div>
+  </form>
+</section>
+
+<script>
+  const table = document.getElementById("csv-table");
+  const headerField = document.getElementById("csv-header");
+  const rowsField = document.getElementById("csv-rows");
+  const form = document.getElementById("csv-form");
+
+  function getRowTexts(row) {
+    return Array.from(row.children).map((cell) => (cell.textContent || "").trim());
+  }
+
+  function serializeTable() {
+    const headRow = table.tHead?.rows?.[0];
+    const header = headRow ? getRowTexts(headRow) : [];
+    const rows = Array.from(table.tBodies[0]?.rows || []).map((row) =>
+      getRowTexts(row).join(",")
+    );
+    headerField.value = header.join(",");
+    rowsField.value = rows.join("\\n");
+  }
+
+  document.getElementById("add-row").addEventListener("click", () => {
+    const colCount = table.tHead?.rows?.[0]?.children.length || 1;
+    const tr = document.createElement("tr");
+    for (let i = 0; i < colCount; i += 1) {
+      const td = document.createElement("td");
+      td.setAttribute("contenteditable", "true");
+      td.textContent = "";
+      tr.appendChild(td);
+    }
+    table.tBodies[0].appendChild(tr);
+  });
+
+  document.getElementById("add-col").addEventListener("click", () => {
+    const headRow = table.tHead?.rows?.[0];
+    if (headRow) {
+      const th = document.createElement("th");
+      th.setAttribute("contenteditable", "true");
+      th.textContent = "";
+      headRow.appendChild(th);
+    }
+    Array.from(table.tBodies[0]?.rows || []).forEach((row) => {
+      const td = document.createElement("td");
+      td.setAttribute("contenteditable", "true");
+      td.textContent = "";
+      row.appendChild(td);
+    });
+  });
+
+  form.addEventListener("submit", () => {
+    serializeTable();
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title or "Monitor Server" }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">MS</span>
+        <span class="brand-text">Monitor Server</span>
+      </div>
+      {% if session.get("authenticated") %}
+        <nav class="nav">
+          <a href="{{ url_for('status') }}">Status</a>
+          <a href="{{ url_for('browse') }}">Arquivos</a>
+          <a href="{{ url_for('processes') }}">Processos</a>
+          <a href="{{ url_for('logout') }}">Sair</a>
+        </nav>
+      {% endif %}
+    </header>
+    <main class="content">
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          <div class="alert">
+            {% for message in messages %}
+              <div>{{ message }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="footer">
+      Porta 5050 • {{ title or "Monitor Server" }}
+    </footer>
+  </body>
+</html>

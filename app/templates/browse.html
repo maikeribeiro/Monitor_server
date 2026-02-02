@@ -1,0 +1,90 @@
+{% extends "layout.html" %}
+{% set title = "Arquivos" %}
+
+{% block content %}
+<section class="panel">
+  <h1>Arquivos</h1>
+  <div class="path">Base: {{ base_path }}{% if rel_path %} / {{ rel_path }}{% endif %}</div>
+  <div class="actions">
+    {% if parent is not none %}
+      <a class="btn" href="{{ url_for('browse', path=parent) }}">⬅ Voltar</a>
+    {% endif %}
+  </div>
+
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Nome</th>
+        <th>Tipo</th>
+        <th>Tamanho</th>
+        <th>Modificado</th>
+        <th>Ações</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td>
+          {% if e.is_dir %}
+            <a href="{{ url_for('browse', path=(rel_path + '/' if rel_path else '') + e.name) }}">{{ e.name }}</a>
+          {% else %}
+            {{ e.name }}
+          {% endif %}
+        </td>
+        <td>{{ 'Pasta' if e.is_dir else 'Arquivo' }}</td>
+        <td>{{ e.size }}</td>
+        <td>{{ e.mtime.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>
+          {% if not e.is_dir %}
+            <a class="btn" href="{{ url_for('download', path=(rel_path + '/' if rel_path else '') + e.name) }}">Download</a>
+            {% if e.name.lower().endswith('.csv') %}
+              <a class="btn" href="{{ url_for('csv_edit', path=(rel_path + '/' if rel_path else '') + e.name) }}">Editar</a>
+            {% endif %}
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <form class="upload" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" id="upload-form">
+    <input type="hidden" name="path" value="{{ rel_path }}" />
+    <label>Upload de arquivo</label>
+    <div class="upload-row">
+      <input type="file" name="file" id="upload-file" required />
+      <button class="btn" type="submit">Enviar</button>
+    </div>
+  </form>
+</section>
+
+<script>
+  const uploadForm = document.getElementById("upload-form");
+  const uploadFile = document.getElementById("upload-file");
+  let lastCheck = { name: "", exists: false };
+
+  async function checkExists() {
+    const file = uploadFile.files?.[0];
+    if (!file) return null;
+    if (lastCheck.name === file.name) return lastCheck.exists;
+    const params = new URLSearchParams({
+      path: "{{ rel_path }}",
+      name: file.name,
+    });
+    const res = await fetch(`/api/exists?${params.toString()}`);
+    if (!res.ok) return false;
+    const data = await res.json();
+    lastCheck = { name: file.name, exists: Boolean(data.exists) };
+    return lastCheck.exists;
+  }
+
+  uploadForm.addEventListener("submit", async (e) => {
+    const exists = await checkExists();
+    if (exists) {
+      const ok = window.confirm("Arquivo já existe. Deseja substituir?");
+      if (!ok) {
+        e.preventDefault();
+      }
+    }
+  });
+</script>
+{% endblock %}

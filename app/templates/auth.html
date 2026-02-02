@@ -1,0 +1,39 @@
+{% extends "layout.html" %}
+
+{% block content %}
+  <section class="panel auth-panel">
+    {% if mode == "setup" %}
+      <h1>Primeiro acesso</h1>
+      <p class="muted">Defina usuário e senha para habilitar o acesso.</p>
+      <form method="post" class="auth-form">
+        <label>
+          <span>Usuário</span>
+          <input type="text" name="username" autocomplete="username" required />
+        </label>
+        <label>
+          <span>Senha</span>
+          <input type="password" name="password" autocomplete="new-password" required />
+        </label>
+        <label>
+          <span>Confirmar senha</span>
+          <input type="password" name="confirm" autocomplete="new-password" required />
+        </label>
+        <button class="btn" type="submit">Salvar</button>
+      </form>
+    {% else %}
+      <h1>Entrar</h1>
+      <p class="muted">Use suas credenciais para continuar.</p>
+      <form method="post" class="auth-form" action="{{ url_for('login', next=next_url) }}">
+        <label>
+          <span>Usuário</span>
+          <input type="text" name="username" autocomplete="username" required />
+        </label>
+        <label>
+          <span>Senha</span>
+          <input type="password" name="password" autocomplete="current-password" required />
+        </label>
+        <button class="btn" type="submit">Entrar</button>
+      </form>
+    {% endif %}
+  </section>
+{% endblock %}
