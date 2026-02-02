@@ -60,6 +60,8 @@ AUTH_STORE = pathlib.Path(
 def require_token() -> None:
     if not ADMIN_TOKEN:
         return
+    if request.endpoint in {"static", "login", "setup", "logout", "healthz"}:
+        return
     # Simple token check via header or query param
     token = request.headers.get("X-Admin-Token") or request.args.get("token")
     if token != ADMIN_TOKEN:
