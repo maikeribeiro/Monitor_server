@@ -11,9 +11,15 @@
     {% endif %}
   </div>
 
-  <table class="table">
+  <form action="{{ url_for('download_multi') }}" method="post" id="download-form">
+    <input type="hidden" name="path" value="{{ rel_path }}" />
+    <div class="actions">
+      <button class="btn" type="submit">Download selecionados</button>
+    </div>
+    <table class="table">
     <thead>
       <tr>
+        <th>Selecionar</th>
         <th>Nome</th>
         <th>Tipo</th>
         <th>Tamanho</th>
@@ -24,6 +30,11 @@
     <tbody>
       {% for e in entries %}
       <tr>
+        <td>
+          {% if not e.is_dir %}
+            <input type="checkbox" name="files" value="{{ e.name }}" />
+          {% endif %}
+        </td>
         <td>
           {% if e.is_dir %}
             <a href="{{ url_for('browse', path=(rel_path + '/' if rel_path else '') + e.name) }}">{{ e.name }}</a>
@@ -45,13 +56,14 @@
       </tr>
       {% endfor %}
     </tbody>
-  </table>
+    </table>
+  </form>
 
   <form class="upload" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" id="upload-form">
     <input type="hidden" name="path" value="{{ rel_path }}" />
-    <label>Upload de arquivo</label>
+    <label>Upload de arquivos</label>
     <div class="upload-row">
-      <input type="file" name="file" id="upload-file" required />
+      <input type="file" name="files" id="upload-file" multiple required />
       <button class="btn" type="submit">Enviar</button>
     </div>
   </form>
@@ -60,21 +72,32 @@
 <script>
   const uploadForm = document.getElementById("upload-form");
   const uploadFile = document.getElementById("upload-file");
+  const downloadForm = document.getElementById("download-form");
   let lastCheck = { name: "", exists: false };
 
   async function checkExists() {
-    const file = uploadFile.files?.[0];
-    if (!file) return null;
-    if (lastCheck.name === file.name) return lastCheck.exists;
-    const params = new URLSearchParams({
-      path: "{{ rel_path }}",
-      name: file.name,
-    });
-    const res = await fetch(`/api/exists?${params.toString()}`);
-    if (!res.ok) return false;
-    const data = await res.json();
-    lastCheck = { name: file.name, exists: Boolean(data.exists) };
-    return lastCheck.exists;
+    const files = Array.from(uploadFile.files || []);
+    if (!files.length) return null;
+    if (files.length === 1 && lastCheck.name === files[0].name) return lastCheck.exists;
+
+    const results = await Promise.all(
+      files.map(async (file) => {
+        const params = new URLSearchParams({
+          path: "{{ rel_path }}",
+          name: file.name,
+        });
+        const res = await fetch(`/api/exists?${params.toString()}`);
+        if (!res.ok) return false;
+        const data = await res.json();
+        return Boolean(data.exists);
+      })
+    );
+
+    if (files.length === 1) {
+      lastCheck = { name: files[0].name, exists: results[0] };
+    }
+
+    return results.some(Boolean);
   }
 
   uploadForm.addEventListener("submit", async (e) => {
@@ -84,6 +107,14 @@
       if (!ok) {
         e.preventDefault();
       }
+    }
+  });
+
+  downloadForm.addEventListener("submit", (e) => {
+    const checked = downloadForm.querySelectorAll('input[name="files"]:checked');
+    if (!checked.length) {
+      e.preventDefault();
+      window.alert("Selecione ao menos um arquivo para download.");
     }
   });
 </script>

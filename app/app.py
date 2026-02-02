@@ -9,6 +9,7 @@ import time
 import csv
 import io
 import subprocess
+import zipfile
 from datetime import datetime
 from typing import Iterable, List, Tuple
 
@@ -360,15 +361,69 @@ def upload():
     if not target_dir.exists() or not target_dir.is_dir():
         abort(404)
 
-    file = request.files.get("file")
-    if not file or not file.filename:
+    files = request.files.getlist("files")
+    if not files:
+        single = request.files.get("file")
+        if single:
+            files = [single]
+    if not files:
         abort(400)
 
-    filename = pathlib.Path(file.filename).name
-    dest = target_dir / filename
-    file.save(dest)
+    saved = False
+    for file in files:
+        if not file or not file.filename:
+            continue
+        filename = pathlib.Path(file.filename).name
+        dest = target_dir / filename
+        file.save(dest)
+        saved = True
+
+    if not saved:
+        abort(400)
 
     return redirect(url_for("browse", path=rel_path))
+
+
+@app.route("/download-multi", methods=["POST"])
+def download_multi():
+    rel_path = request.form.get("path", "")
+    names = request.form.getlist("files")
+    try:
+        target_dir = _safe_join(BASE_BROWSE_PATH, rel_path)
+    except ValueError:
+        abort(400)
+    if not target_dir.exists() or not target_dir.is_dir():
+        abort(404)
+    if not names:
+        abort(400)
+
+    normalized: List[pathlib.Path] = []
+    for name in names:
+        filename = pathlib.Path(name).name
+        if not filename:
+            continue
+        candidate = target_dir / filename
+        if candidate.exists() and candidate.is_file():
+            normalized.append(candidate)
+
+    if not normalized:
+        abort(404)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in normalized:
+            zf.write(path, arcname=path.name)
+    buffer.seek(0)
+
+    zip_name = "arquivos.zip"
+    if rel_path:
+        zip_name = f"{pathlib.Path(rel_path).name or 'arquivos'}.zip"
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=zip_name,
+        mimetype="application/zip",
+    )
 
 
 @app.route("/api/exists")
