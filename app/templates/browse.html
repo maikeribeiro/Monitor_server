@@ -102,8 +102,13 @@
 
   uploadForm.addEventListener("submit", async (e) => {
     const exists = await checkExists();
+    const files = Array.from(uploadFile.files || []);
     if (exists) {
-      const ok = window.confirm("Arquivo já existe. Deseja substituir?");
+      const message =
+        files.length > 1
+          ? "Alguns arquivos já existem. Deseja substituir todos?"
+          : "Arquivo já existe. Deseja substituir?";
+      const ok = window.confirm(message);
       if (!ok) {
         e.preventDefault();
       }
