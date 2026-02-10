@@ -2,62 +2,100 @@
 {% set title = "Arquivos" %}
 
 {% block content %}
-<section class="panel">
-  <h1>Arquivos</h1>
-  <div class="path">Base: {{ base_path }}{% if rel_path %} / {{ rel_path }}{% endif %}</div>
-  <div class="actions">
-    {% if parent is not none %}
-      <a class="btn" href="{{ url_for('browse', path=parent) }}">⬅ Voltar</a>
-    {% endif %}
+<section class="panel explorer">
+  <div class="explorer-header">
+    <div class="explorer-title">
+      <h1>Arquivos</h1>
+      <div class="path-bar">
+        <span class="path-label">Local</span>
+        <div class="breadcrumbs">
+          <a class="crumb" href="{{ url_for('browse') }}">{{ base_path }}</a>
+          {% if rel_path %}
+            {% set current = "" %}
+            {% for part in rel_path.split('/') %}
+              {% set current = current + '/' + part if current else part %}
+              <span class="crumb-sep">/</span>
+              <a class="crumb" href="{{ url_for('browse', path=current) }}">{{ part }}</a>
+            {% endfor %}
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="explorer-actions">
+      {% if parent is not none %}
+        <a class="btn btn-secondary" href="{{ url_for('browse', path=parent) }}">⬅ Voltar</a>
+      {% endif %}
+      <button class="btn" type="submit" form="download-form">Download selecionados</button>
+    </div>
   </div>
 
   <form action="{{ url_for('download_multi') }}" method="post" id="download-form">
     <input type="hidden" name="path" value="{{ rel_path }}" />
-    <div class="actions">
-      <button class="btn" type="submit">Download selecionados</button>
-    </div>
-    <table class="table">
-    <thead>
-      <tr>
-        <th>Selecionar</th>
-        <th>Nome</th>
-        <th>Tipo</th>
-        <th>Tamanho</th>
-        <th>Modificado</th>
-        <th>Ações</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for e in entries %}
-      <tr>
-        <td>
-          {% if not e.is_dir %}
-            <input type="checkbox" name="files" value="{{ e.name }}" />
-          {% endif %}
-        </td>
-        <td>
-          {% if e.is_dir %}
-            <a href="{{ url_for('browse', path=(rel_path + '/' if rel_path else '') + e.name) }}">{{ e.name }}</a>
-          {% else %}
-            {{ e.name }}
-          {% endif %}
-        </td>
-        <td>{{ 'Pasta' if e.is_dir else 'Arquivo' }}</td>
-        <td>{{ e.size }}</td>
-        <td>{{ e.mtime.strftime('%Y-%m-%d %H:%M') }}</td>
-        <td>
-          {% if not e.is_dir %}
-            <a class="btn" href="{{ url_for('download', path=(rel_path + '/' if rel_path else '') + e.name) }}">Download</a>
-            {% if e.name.lower().endswith('.csv') %}
-              <a class="btn" href="{{ url_for('csv_edit', path=(rel_path + '/' if rel_path else '') + e.name) }}">Editar</a>
-            {% endif %}
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
+    <table class="table explorer-table">
+      <thead>
+        <tr>
+          <th class="select-cell"><input type="checkbox" id="select-all" /></th>
+          <th>Nome</th>
+          <th>Tipo</th>
+          <th>Tamanho</th>
+          <th>Modificado</th>
+          <th>Ações</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if entries %}
+          {% for e in entries %}
+          <tr class="file-row {{ 'is-dir' if e.is_dir else 'is-file' }}">
+            <td class="select-cell">
+              {% if not e.is_dir %}
+                <input type="checkbox" name="files" value="{{ e.name }}" />
+              {% endif %}
+            </td>
+            <td class="name-cell">
+              <span class="file-icon {{ 'icon-folder' if e.is_dir else 'icon-file' }}"></span>
+              {% if e.is_dir %}
+                <a class="file-link" href="{{ url_for('browse', path=(rel_path + '/' if rel_path else '') + e.name) }}">{{ e.name }}</a>
+              {% else %}
+                <span class="file-name">{{ e.name }}</span>
+              {% endif %}
+            </td>
+            <td class="type-cell">{{ 'Pasta' if e.is_dir else 'Arquivo' }}</td>
+            <td class="size-cell">{{ e.size }}</td>
+            <td class="date-cell">{{ e.mtime.strftime('%Y-%m-%d %H:%M') }}</td>
+            <td class="action-cell">
+              {% if e.is_dir %}
+                <a class="btn btn-secondary btn-small" href="{{ url_for('browse', path=(rel_path + '/' if rel_path else '') + e.name) }}">Abrir</a>
+                <form class="inline-form" action="{{ url_for('delete') }}" method="post">
+                  <input type="hidden" name="path" value="{{ (rel_path + '/' if rel_path else '') + e.name }}" />
+                  <button class="btn btn-danger btn-small" type="submit" data-confirm="Deseja excluir esta pasta?">Excluir</button>
+                </form>
+              {% else %}
+                <a class="btn btn-secondary btn-small" href="{{ url_for('view', path=(rel_path + '/' if rel_path else '') + e.name) }}" target="_blank" rel="noopener">Visualizar</a>
+                <a class="btn btn-secondary btn-small" href="{{ url_for('download', path=(rel_path + '/' if rel_path else '') + e.name) }}">Download</a>
+                {% if e.name.lower().endswith('.csv') %}
+                  <a class="btn btn-small" href="{{ url_for('csv_edit', path=(rel_path + '/' if rel_path else '') + e.name) }}">Editar</a>
+                {% endif %}
+                <form class="inline-form" action="{{ url_for('delete') }}" method="post">
+                  <input type="hidden" name="path" value="{{ (rel_path + '/' if rel_path else '') + e.name }}" />
+                  <button class="btn btn-danger btn-small" type="submit" data-confirm="Deseja excluir este arquivo?">Excluir</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr class="empty-row">
+            <td colspan="6">Pasta vazia.</td>
+          </tr>
+        {% endif %}
+      </tbody>
     </table>
   </form>
+
+  <div class="explorer-footer">
+    <div class="item-count">{{ entries|length }} itens</div>
+    <div class="muted">Tamanho em bytes • {{ base_path }}</div>
+  </div>
 
   <form class="upload" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" id="upload-form">
     <input type="hidden" name="path" value="{{ rel_path }}" />
@@ -73,6 +111,7 @@
   const uploadForm = document.getElementById("upload-form");
   const uploadFile = document.getElementById("upload-file");
   const downloadForm = document.getElementById("download-form");
+  const selectAll = document.getElementById("select-all");
   let lastCheck = { name: "", exists: false };
 
   async function checkExists() {
@@ -121,6 +160,49 @@
       e.preventDefault();
       window.alert("Selecione ao menos um arquivo para download.");
     }
+  });
+
+  const rowCheckboxes = downloadForm.querySelectorAll('input[name="files"]');
+
+  function syncRowSelection(checkbox) {
+    const row = checkbox.closest("tr");
+    if (row) {
+      row.classList.toggle("is-selected", checkbox.checked);
+    }
+  }
+
+  rowCheckboxes.forEach((checkbox) => {
+    checkbox.addEventListener("change", () => syncRowSelection(checkbox));
+  });
+
+  if (selectAll) {
+    selectAll.addEventListener("change", () => {
+      rowCheckboxes.forEach((checkbox) => {
+        checkbox.checked = selectAll.checked;
+        syncRowSelection(checkbox);
+      });
+    });
+  }
+
+  downloadForm.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest("a, button, input")) return;
+    const row = target.closest("tr.file-row");
+    if (!row) return;
+    const checkbox = row.querySelector('input[name="files"]');
+    if (!checkbox) return;
+    checkbox.checked = !checkbox.checked;
+    syncRowSelection(checkbox);
+  });
+
+  document.querySelectorAll("[data-confirm]").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      const message = btn.getAttribute("data-confirm") || "Confirmar exclusão?";
+      if (!window.confirm(message)) {
+        event.preventDefault();
+      }
+    });
   });
 </script>
 {% endblock %}

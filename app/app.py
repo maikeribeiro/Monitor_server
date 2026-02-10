@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import pathlib
 import platform
@@ -35,6 +36,7 @@ except Exception:  # pragma: no cover - handled at runtime
 APP_ROOT = pathlib.Path(__file__).resolve().parent
 BASE_BROWSE_PATH = pathlib.Path(os.environ.get("BROWSE_ROOT", "/home")).resolve()
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
+BUILD_ID = os.environ.get("BUILD_ID") or datetime.now().strftime("%Y%m%d-%H%M")
 SERVICE_NAME = os.environ.get("SERVICE_NAME", "SistemaME")
 SERVICE_MATCH = os.environ.get("SERVICE_MATCH", "/home/sistemame/SistemaME/venv/bin/gunicorn")
 SERVICE_USER = os.environ.get("SERVICE_USER", "sistemame")
@@ -64,6 +66,11 @@ def _auth_payload() -> dict | None:
         return json.loads(AUTH_STORE.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+@app.context_processor
+def inject_build_id() -> dict:
+    return {"build_id": BUILD_ID}
 
 
 def _has_credentials() -> bool:
@@ -350,6 +357,34 @@ def download():
     return send_file(target, as_attachment=True)
 
 
+def _guess_mime(path: pathlib.Path) -> str:
+    mime, _ = mimetypes.guess_type(str(path))
+    if mime:
+        return mime
+    if path.suffix.lower() in {".log", ".txt", ".csv"}:
+        return "text/plain"
+    if path.suffix.lower() == ".svg":
+        return "image/svg+xml"
+    return "application/octet-stream"
+
+
+@app.route("/view")
+def view():
+    rel_path = request.args.get("path", "")
+    try:
+        target = _safe_join(BASE_BROWSE_PATH, rel_path)
+    except ValueError:
+        abort(400)
+    if not target.exists() or not target.is_file():
+        abort(404)
+    return send_file(
+        target,
+        mimetype=_guess_mime(target),
+        as_attachment=False,
+        download_name=target.name,
+    )
+
+
 @app.route("/upload", methods=["POST"])
 def upload():
     rel_path = request.form.get("path", "")
@@ -382,6 +417,35 @@ def upload():
         abort(400)
 
     return redirect(url_for("browse", path=rel_path))
+
+
+@app.route("/delete", methods=["POST"])
+def delete():
+    rel_path = request.form.get("path", "")
+    if not rel_path:
+        abort(400)
+    try:
+        target = _safe_join(BASE_BROWSE_PATH, rel_path)
+    except ValueError:
+        abort(400)
+
+    if not target.exists():
+        abort(404)
+
+    parent = str(target.parent.relative_to(BASE_BROWSE_PATH))
+    if target.is_file():
+        target.unlink()
+        flash("Arquivo removido.")
+    elif target.is_dir():
+        try:
+            target.rmdir()
+            flash("Pasta removida.")
+        except OSError:
+            flash("A pasta não está vazia.")
+    else:
+        abort(400)
+
+    return redirect(url_for("browse", path=parent))
 
 
 @app.route("/download-multi", methods=["POST"])
