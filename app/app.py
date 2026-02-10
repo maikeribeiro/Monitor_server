@@ -164,6 +164,46 @@ def _service_processes() -> List[dict]:
     return procs
 
 
+def _list_services() -> List[dict]:
+    try:
+        res = subprocess.run(
+            [
+                "systemctl",
+                "list-units",
+                "--type=service",
+                "--state=running",
+                "--no-legend",
+                "--no-pager",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return []
+    if res.returncode != 0:
+        return []
+    services = []
+    for line in (res.stdout or "").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(None, 4)
+        if len(parts) < 5:
+            continue
+        unit, load, active, sub, description = parts
+        services.append(
+            {
+                "unit": unit,
+                "load": load,
+                "active": active,
+                "sub": sub,
+                "description": description,
+            }
+        )
+    return services
+
+
 def _run_as_service_user(cmd: List[str], cwd: str | None = None) -> Tuple[int, str]:
     # Uses sudo -u to execute as SERVICE_USER; requires sudoers rule.
     full_cmd = ["sudo", "-u", SERVICE_USER] + cmd
@@ -629,6 +669,12 @@ def processes():
         )
     procs.sort(key=lambda p: (p["cpu"] or 0, p["mem"] or 0), reverse=True)
     return render_template("processes.html", procs=procs[:50])
+
+
+@app.route("/services")
+def services():
+    items = _list_services()
+    return render_template("services.html", services=items)
 
 
 @app.route("/healthz")

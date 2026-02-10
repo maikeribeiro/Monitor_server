@@ -1,0 +1,38 @@
+{% extends "layout.html" %}
+{% set title = "Serviços" %}
+
+{% block content %}
+<section class="panel">
+  <h1>Serviços em execução</h1>
+  <div class="muted">systemd • ativos</div>
+
+  <table class="table explorer-table">
+    <thead>
+      <tr>
+        <th>Unidade</th>
+        <th>Load</th>
+        <th>Active</th>
+        <th>Sub</th>
+        <th>Descrição</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if services %}
+        {% for s in services %}
+        <tr>
+          <td>{{ s.unit }}</td>
+          <td>{{ s.load }}</td>
+          <td>{{ s.active }}</td>
+          <td>{{ s.sub }}</td>
+          <td>{{ s.description }}</td>
+        </tr>
+        {% endfor %}
+      {% else %}
+        <tr class="empty-row">
+          <td colspan="5">Nenhum serviço encontrado ou sem permissão.</td>
+        </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
