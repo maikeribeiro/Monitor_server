@@ -18,3 +18,8 @@ Acesse: `http://localhost:5050`
 - `BROWSE_ROOT`: raiz de navegação de arquivos (padrão `/home`).
 - `MAX_UPLOAD_MB`: limite de upload (padrão 100).
 - `ADMIN_TOKEN`: se definido, exige token via header `X-Admin-Token` ou query `?token=...`.
+
+
+resset do serviço 
+
+sudo systemctl restart monitor-server
