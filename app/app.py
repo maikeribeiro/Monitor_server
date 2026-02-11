@@ -11,6 +11,7 @@ import csv
 import io
 import subprocess
 import zipfile
+import shutil
 from datetime import datetime
 from typing import Iterable, List, Tuple
 
@@ -49,6 +50,13 @@ SERVICE_START_CMD = os.environ.get(
 SERVICE_WORKDIR = os.environ.get("SERVICE_WORKDIR", "/home/sistemame/SistemaME")
 GIT_PULL_DIR = os.environ.get("GIT_PULL_DIR", "/home/sistemame/SistemaME")
 GIT_PULL_SCRIPT = os.environ.get("GIT_PULL_SCRIPT", "/home/sistemame/atualizar.sh")
+BACKUP_SOURCE = pathlib.Path(
+    os.environ.get("BACKUP_SOURCE", "/home/sistemame/bdsistemame")
+).resolve()
+BACKUP_DEST = pathlib.Path(
+    os.environ.get("BACKUP_DEST", "/home/sistemame/OneDrive/bkp_bdsistemame")
+).resolve()
+BACKUP_SCHEDULE = os.environ.get("BACKUP_SCHEDULE", "07:00,19:00")
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
@@ -142,6 +150,93 @@ def _fmt_bytes(value: int | float | None) -> str:
     if unit == 0:
         return f"{int(size)} {units[unit]}"
     return f"{size:.1f} {units[unit]}"
+
+
+def _backup_dir_name(moment: datetime) -> str:
+    return moment.strftime("%Y%m%d-%H%M%S")
+
+
+def _dir_size(path: pathlib.Path) -> int:
+    total = 0
+    for root, _, files in os.walk(path):
+        for filename in files:
+            try:
+                total += (pathlib.Path(root) / filename).stat().st_size
+            except OSError:
+                continue
+    return total
+
+
+def _list_backups() -> List[dict]:
+    if not BACKUP_DEST.exists():
+        return []
+    backups = []
+    for entry in BACKUP_DEST.iterdir():
+        if not entry.is_dir():
+            continue
+        try:
+            stat = entry.stat()
+        except OSError:
+            continue
+        backups.append(
+            {
+                "name": entry.name,
+                "path": entry,
+                "mtime": datetime.fromtimestamp(stat.st_mtime),
+            }
+        )
+    backups.sort(key=lambda item: item["mtime"], reverse=True)
+    for backup in backups:
+        backup["size"] = _dir_size(backup["path"])
+        backup["size_h"] = _fmt_bytes(backup["size"])
+    return backups
+
+
+def _backup_files(base_dir: pathlib.Path) -> List[dict]:
+    files = []
+    for root, _, filenames in os.walk(base_dir):
+        for filename in filenames:
+            path = pathlib.Path(root) / filename
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            files.append(
+                {
+                    "name": filename,
+                    "path": path,
+                    "rel": path.relative_to(base_dir),
+                    "size": stat.st_size,
+                    "size_h": _fmt_bytes(stat.st_size),
+                    "mtime": datetime.fromtimestamp(stat.st_mtime),
+                }
+            )
+    files.sort(key=lambda item: str(item["rel"]).lower())
+    return files
+
+
+def _relative_to_base(path: pathlib.Path) -> str:
+    try:
+        return str(path.resolve().relative_to(BASE_BROWSE_PATH))
+    except Exception:
+        return ""
+
+
+def _create_backup() -> Tuple[bool, str]:
+    if not BACKUP_SOURCE.exists() or not BACKUP_SOURCE.is_dir():
+        return False, "Origem do backup não encontrada."
+    try:
+        BACKUP_DEST.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False, "Não foi possível criar a pasta de destino."
+
+    backup_dir = BACKUP_DEST / _backup_dir_name(datetime.now())
+    try:
+        shutil.copytree(BACKUP_SOURCE, backup_dir, copy_function=shutil.copy2)
+    except Exception as exc:
+        return False, f"Erro ao gerar backup: {exc}"
+
+    return True, f"Backup criado: {backup_dir.name}"
 
 
 def _service_processes() -> List[dict]:
@@ -382,6 +477,69 @@ def browse():
         rel_path=rel_path,
         parent=parent,
         entries=entries,
+    )
+
+
+@app.route("/backup")
+def backup():
+    backups = _list_backups()
+    return render_template(
+        "backup.html",
+        backups=backups,
+        backup_source=str(BACKUP_SOURCE),
+        backup_dest=str(BACKUP_DEST),
+        backup_schedule=BACKUP_SCHEDULE,
+    )
+
+
+@app.route("/backup/run", methods=["POST"])
+def backup_run():
+    ok, message = _create_backup()
+    flash(message)
+    return redirect(url_for("backup"))
+
+
+@app.route("/backup/view")
+def backup_view():
+    name = pathlib.Path(request.args.get("name", "")).name
+    if not name:
+        abort(400)
+    target = BACKUP_DEST / name
+    if not target.exists() or not target.is_dir():
+        abort(404)
+    files = _backup_files(target)
+    for item in files:
+        item["browse_path"] = _relative_to_base(item["path"])
+    return render_template(
+        "backup_files.html",
+        backup_name=name,
+        backup_path=str(target),
+        files=files,
+    )
+
+
+@app.route("/backup/download")
+def backup_download():
+    name = pathlib.Path(request.args.get("name", "")).name
+    if not name:
+        abort(400)
+    target = BACKUP_DEST / name
+    if not target.exists() or not target.is_dir():
+        abort(404)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, _, filenames in os.walk(target):
+            for filename in filenames:
+                path = pathlib.Path(root) / filename
+                arcname = str(path.relative_to(target))
+                zf.write(path, arcname=arcname)
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f"{name}.zip",
+        mimetype="application/zip",
     )
 
 
