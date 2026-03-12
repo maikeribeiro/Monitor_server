@@ -12,7 +12,12 @@ import io
 import subprocess
 import zipfile
 import shutil
-from datetime import datetime
+import ssl
+import urllib.request
+import urllib.error
+from urllib.parse import urlparse
+import threading
+from datetime import datetime, timedelta
 from typing import Iterable, List, Tuple
 
 from flask import (
@@ -57,14 +62,31 @@ BACKUP_DEST = pathlib.Path(
     os.environ.get("BACKUP_DEST", "/home/sistemame/OneDrive/bkp_bdsistemame")
 ).resolve()
 BACKUP_SCHEDULE = os.environ.get("BACKUP_SCHEDULE", "07:00,19:00")
+BACKUP_STATE_PATH = pathlib.Path(
+    os.environ.get("BACKUP_STATE_PATH", str(APP_ROOT / ".backup_schedule_state.json"))
+).resolve()
+MONITOR_TIMEOUT = float(os.environ.get("MONITOR_TIMEOUT", "6"))
+MONITOR_HISTORY_LIMIT = int(os.environ.get("MONITOR_HISTORY_LIMIT", "2000"))
+MONITOR_HISTORY_PATH = pathlib.Path(
+    os.environ.get("MONITOR_HISTORY_PATH", str(APP_ROOT / ".site_monitor_history.jsonl"))
+).resolve()
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24))
+app.permanent_session_lifetime = timedelta(
+    days=int(os.environ.get("SESSION_DAYS", "30"))
+)
 
 AUTH_STORE = pathlib.Path(
     os.environ.get("AUTH_STORE", str(APP_ROOT / ".credentials.json"))
 ).resolve()
+DEFAULT_MONITOR_SITES = [
+    {
+        "name": "SiteME WordPress",
+        "url": "http://siteme.vps7323.panel.icontainer.cloud/",
+    }
+]
 
 
 def _auth_payload() -> dict | None:
@@ -98,6 +120,164 @@ def _save_credentials(username: str, password: str) -> None:
         os.chmod(AUTH_STORE, 0o600)
     except Exception:
         pass
+
+
+def _load_monitor_sites() -> List[dict]:
+    raw = os.environ.get("MONITOR_SITES", "").strip()
+    if not raw:
+        return DEFAULT_MONITOR_SITES
+    if raw.startswith("["):
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return DEFAULT_MONITOR_SITES
+        if isinstance(data, list):
+            return _normalize_monitor_sites(data)
+        return DEFAULT_MONITOR_SITES
+    items = [s.strip() for s in raw.split(",") if s.strip()]
+    return _normalize_monitor_sites(items) if items else DEFAULT_MONITOR_SITES
+
+
+def _site_name_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    host = parsed.hostname or url
+    return host.replace("www.", "")
+
+
+def _normalize_monitor_sites(items: List[object]) -> List[dict]:
+    sites: List[dict] = []
+    for item in items:
+        if isinstance(item, str):
+            url = item
+            sites.append({"name": _site_name_from_url(url), "url": url})
+        elif isinstance(item, dict):
+            url = (item.get("url") or "").strip()
+            if not url:
+                continue
+            name = (item.get("name") or "").strip() or _site_name_from_url(url)
+            sites.append({"name": name, "url": url})
+    return sites or DEFAULT_MONITOR_SITES
+
+
+def _append_monitor_history(record: dict) -> None:
+    MONITOR_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, ensure_ascii=True)
+    with MONITOR_HISTORY_PATH.open("a", encoding="utf-8") as f:
+        f.write(line + "\n")
+    _prune_monitor_history()
+
+
+def _prune_monitor_history() -> None:
+    if not MONITOR_HISTORY_PATH.exists():
+        return
+    try:
+        lines = MONITOR_HISTORY_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return
+    if len(lines) <= MONITOR_HISTORY_LIMIT:
+        return
+    keep = lines[-MONITOR_HISTORY_LIMIT :]
+    MONITOR_HISTORY_PATH.write_text("\n".join(keep) + "\n", encoding="utf-8")
+
+
+def _load_monitor_history(limit: int = 30, site_name: str | None = None) -> List[dict]:
+    if not MONITOR_HISTORY_PATH.exists():
+        return []
+    try:
+        lines = MONITOR_HISTORY_PATH.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return []
+    items: List[dict] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        if site_name and payload.get("name") != site_name:
+            continue
+        items.append(payload)
+    if limit > 0:
+        items = items[-limit:]
+    return list(reversed(items))
+
+
+def _ssl_check(host: str, port: int = 443, timeout: float = 6.0) -> dict:
+    ctx = ssl.create_default_context()
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+                cert = ssock.getpeercert()
+    except Exception as exc:
+        return {
+            "ssl_checked": True,
+            "ssl_valid": False,
+            "ssl_days_left": None,
+            "ssl_error": str(exc),
+        }
+    not_after = cert.get("notAfter")
+    if not not_after:
+        return {
+            "ssl_checked": True,
+            "ssl_valid": False,
+            "ssl_days_left": None,
+            "ssl_error": "Certificado sem data de expiração.",
+        }
+    expires_ts = ssl.cert_time_to_seconds(not_after)
+    days_left = int((expires_ts - time.time()) // 86400)
+    return {
+        "ssl_checked": True,
+        "ssl_valid": days_left >= 0,
+        "ssl_days_left": days_left,
+        "ssl_error": None,
+    }
+
+
+def _check_site(site: dict) -> dict:
+    url = site.get("url", "")
+    name = site.get("name", "") or _site_name_from_url(url)
+    parsed = urlparse(url)
+    host = parsed.hostname or url
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    response_ms = None
+    status_code = None
+    error = None
+    http_ok = False
+    start = time.perf_counter()
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "MonitorServer/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=MONITOR_TIMEOUT) as res:
+            status_code = res.status
+            res.read(256)
+        response_ms = int((time.perf_counter() - start) * 1000)
+        http_ok = 200 <= (status_code or 0) < 400
+    except urllib.error.HTTPError as exc:
+        status_code = exc.code
+        response_ms = int((time.perf_counter() - start) * 1000)
+        error = f"HTTP {exc.code}"
+    except Exception as exc:
+        response_ms = int((time.perf_counter() - start) * 1000)
+        error = str(exc)
+
+    ssl_info = _ssl_check(host, 443, timeout=MONITOR_TIMEOUT)
+    record = {
+        "ts": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "name": name,
+        "url": url,
+        "host": host,
+        "port": port,
+        "http_ok": http_ok,
+        "status_code": status_code,
+        "response_ms": response_ms,
+        "error": error,
+        **ssl_info,
+    }
+    _append_monitor_history(record)
+    return record
 
 
 @app.before_request
@@ -168,23 +348,29 @@ def _dir_size(path: pathlib.Path) -> int:
 
 
 def _list_backups() -> List[dict]:
-    if not BACKUP_DEST.exists():
+    try:
+        if not BACKUP_DEST.exists():
+            return []
+    except PermissionError:
         return []
     backups = []
-    for entry in BACKUP_DEST.iterdir():
-        if not entry.is_dir():
-            continue
-        try:
-            stat = entry.stat()
-        except OSError:
-            continue
-        backups.append(
-            {
-                "name": entry.name,
-                "path": entry,
-                "mtime": datetime.fromtimestamp(stat.st_mtime),
-            }
-        )
+    try:
+        for entry in BACKUP_DEST.iterdir():
+            if not entry.is_dir():
+                continue
+            try:
+                stat = entry.stat()
+            except OSError:
+                continue
+            backups.append(
+                {
+                    "name": entry.name,
+                    "path": entry,
+                    "mtime": datetime.fromtimestamp(stat.st_mtime),
+                }
+            )
+    except PermissionError:
+        return []
     backups.sort(key=lambda item: item["mtime"], reverse=True)
     for backup in backups:
         backup["size"] = _dir_size(backup["path"])
@@ -237,6 +423,98 @@ def _create_backup() -> Tuple[bool, str]:
         return False, f"Erro ao gerar backup: {exc}"
 
     return True, f"Backup criado: {backup_dir.name}"
+
+
+def _parse_backup_schedule(value: str) -> List[str]:
+    items = []
+    for raw in (value or "").split(","):
+        item = raw.strip()
+        if not item:
+            continue
+        parts = item.split(":")
+        if len(parts) != 2:
+            continue
+        hour, minute = parts
+        if not (hour.isdigit() and minute.isdigit()):
+            continue
+        h = int(hour)
+        m = int(minute)
+        if h < 0 or h > 23 or m < 0 or m > 59:
+            continue
+        items.append(f"{h:02d}:{m:02d}")
+    return sorted(set(items))
+
+
+def _load_backup_state() -> dict:
+    if not BACKUP_STATE_PATH.exists():
+        return {}
+    try:
+        return json.loads(BACKUP_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_backup_state(state: dict) -> None:
+    BACKUP_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    BACKUP_STATE_PATH.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def _should_run_backup(now: datetime, schedule: str, state: dict) -> bool:
+    last = state.get(schedule, {}).get("last_run")
+    try:
+        last_dt = datetime.fromisoformat(last) if last else None
+    except Exception:
+        last_dt = None
+    if last_dt and last_dt.date() == now.date():
+        return False
+    hour, minute = (int(part) for part in schedule.split(":"))
+    due = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return now >= due
+
+
+def _backup_scheduler_loop() -> None:
+    try:
+        import fcntl  # type: ignore
+    except Exception:
+        fcntl = None
+
+    lock_handle = None
+    if fcntl:
+        lock_handle = open(str(APP_ROOT / ".backup_scheduler.lock"), "a", encoding="utf-8")
+        try:
+            fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except Exception:
+            return
+
+    schedule = _parse_backup_schedule(BACKUP_SCHEDULE)
+    if not schedule:
+        return
+
+    run_lock = threading.Lock()
+    while True:
+        now = datetime.now()
+        state = _load_backup_state()
+        for item in schedule:
+            if not _should_run_backup(now, item, state):
+                continue
+            if not run_lock.acquire(blocking=False):
+                continue
+            try:
+                ok, message = _create_backup()
+                state[item] = {
+                    "last_run": datetime.now().isoformat(timespec="seconds"),
+                    "ok": ok,
+                    "message": message,
+                }
+                _save_backup_state(state)
+            finally:
+                run_lock.release()
+        time.sleep(30)
+
+
+def _start_backup_scheduler() -> None:
+    thread = threading.Thread(target=_backup_scheduler_loop, name="backup-scheduler", daemon=True)
+    thread.start()
 
 
 def _service_processes() -> List[dict]:
@@ -318,7 +596,7 @@ def _run_as_service_user(cmd: List[str], cwd: str | None = None) -> Tuple[int, s
 
 @app.route("/")
 def index():
-    return redirect(url_for("browse"))
+    return redirect(url_for("status"))
 
 
 @app.route("/setup", methods=["GET", "POST"])
@@ -356,6 +634,7 @@ def login():
         ):
             session["authenticated"] = True
             session["username"] = username
+            session.permanent = True
             return redirect(next_url)
         flash("Usuário ou senha inválidos.")
     return render_template("auth.html", mode="login", title="Entrar", next_url=next_url)
@@ -452,6 +731,28 @@ def api_service():
     )
 
 
+@app.route("/api/site-check")
+def api_site_check():
+    sites = _load_monitor_sites()
+    name = (request.args.get("name") or "").strip()
+    if name:
+        sites = [s for s in sites if s.get("name") == name]
+    results = [_check_site(site) for site in sites]
+    return jsonify({"checked_at": datetime.utcnow().isoformat(timespec="seconds") + "Z", "results": results})
+
+
+@app.route("/api/site-history")
+def api_site_history():
+    limit_raw = request.args.get("limit") or "30"
+    try:
+        limit = max(1, min(200, int(limit_raw)))
+    except Exception:
+        limit = 30
+    name = (request.args.get("name") or "").strip() or None
+    items = _load_monitor_history(limit=limit, site_name=name)
+    return jsonify({"items": items})
+
+
 @app.route("/browse")
 def browse():
     rel_path = request.args.get("path", "")
@@ -482,7 +783,13 @@ def browse():
 
 @app.route("/backup")
 def backup():
-    backups = _list_backups()
+    backups = []
+    try:
+        backups = _list_backups()
+        if not backups and not BACKUP_DEST.exists():
+            flash("Destino de backup não encontrado.")
+    except PermissionError:
+        flash(f"Sem permissão para acessar o destino do backup: {BACKUP_DEST}")
     return render_template(
         "backup.html",
         backups=backups,
@@ -840,5 +1147,7 @@ def healthz():
     return "ok"
 
 
+_start_backup_scheduler()
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5050, debug=False)
+    app.run(host="0.0.0.0", port=5051, debug=False)

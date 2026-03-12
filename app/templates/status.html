@@ -89,6 +89,50 @@
   {% else %}
   <p class="warn">psutil não disponível. Instale para métricas de CPU/Memória/Disco.</p>
   {% endif %}
+  <div class="card">
+    <div class="label">Monitoramento do site</div>
+    <div class="actions">
+      <button class="btn" type="button" id="site-check">Checar agora</button>
+    </div>
+    <table class="table" id="site-table">
+      <thead>
+        <tr>
+          <th>Site</th>
+          <th>URL</th>
+          <th>Status</th>
+          <th>HTTP</th>
+          <th>Tempo</th>
+          <th>SSL</th>
+          <th>Última checagem</th>
+        </tr>
+      </thead>
+      <tbody id="site-table-body">
+        <tr>
+          <td colspan="7" class="muted">Aguardando checagem.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <div class="label">Histórico (últimas 30 checagens)</div>
+    <table class="table" id="site-history">
+      <thead>
+        <tr>
+          <th>Quando</th>
+          <th>Site</th>
+          <th>Status</th>
+          <th>HTTP</th>
+          <th>Tempo</th>
+          <th>SSL</th>
+        </tr>
+      </thead>
+      <tbody id="site-history-body">
+        <tr>
+          <td colspan="6" class="muted">Sem registros ainda.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
 </section>
 
 <script>
@@ -120,6 +164,91 @@
     const ts = new Date().toLocaleTimeString("pt-BR");
     out.textContent += `\n[${ts}] ${text}`;
     out.scrollTop = out.scrollHeight;
+  }
+
+  function fmtMs(value) {
+    if (value === null || value === undefined) return "-";
+    return `${value} ms`;
+  }
+
+  function renderSiteRows(results) {
+    const body = document.getElementById("site-table-body");
+    if (!body) return;
+    body.innerHTML = "";
+    if (!results || results.length === 0) {
+      body.innerHTML = `<tr><td colspan="7" class="muted">Nenhum site configurado.</td></tr>`;
+      return;
+    }
+    for (const item of results) {
+      const statusText = item.http_ok ? "Online" : "Offline";
+      const statusClass = item.http_ok ? "status-pill status-ok" : "status-pill status-bad";
+      const httpText = item.status_code ? `${item.status_code}` : "-";
+      const sslText = item.ssl_checked
+        ? (item.ssl_valid ? `OK (${item.ssl_days_left}d)` : "Falha")
+        : "-";
+      const sslClass = item.ssl_checked
+        ? (item.ssl_valid ? "status-pill status-ok" : "status-pill status-bad")
+        : "status-pill status-neutral";
+      const ts = item.ts ? fmt.format(new Date(item.ts)) : "-";
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td>${item.name || "-"}</td>
+        <td><a class="file-link" href="${item.url}" target="_blank" rel="noopener">${item.url}</a></td>
+        <td><span class="${statusClass}">${statusText}</span></td>
+        <td>${httpText}</td>
+        <td>${fmtMs(item.response_ms)}</td>
+        <td><span class="${sslClass}">${sslText}</span></td>
+        <td>${ts}</td>
+      `;
+      body.appendChild(row);
+    }
+  }
+
+  function renderHistoryRows(items) {
+    const body = document.getElementById("site-history-body");
+    if (!body) return;
+    body.innerHTML = "";
+    if (!items || items.length === 0) {
+      body.innerHTML = `<tr><td colspan="6" class="muted">Sem registros ainda.</td></tr>`;
+      return;
+    }
+    for (const item of items) {
+      const statusText = item.http_ok ? "Online" : "Offline";
+      const statusClass = item.http_ok ? "status-pill status-ok" : "status-pill status-bad";
+      const httpText = item.status_code ? `${item.status_code}` : "-";
+      const sslText = item.ssl_checked
+        ? (item.ssl_valid ? `OK (${item.ssl_days_left}d)` : "Falha")
+        : "-";
+      const sslClass = item.ssl_checked
+        ? (item.ssl_valid ? "status-pill status-ok" : "status-pill status-bad")
+        : "status-pill status-neutral";
+      const ts = item.ts ? fmt.format(new Date(item.ts)) : "-";
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td>${ts}</td>
+        <td>${item.name || "-"}</td>
+        <td><span class="${statusClass}">${statusText}</span></td>
+        <td>${httpText}</td>
+        <td>${fmtMs(item.response_ms)}</td>
+        <td><span class="${sslClass}">${sslText}</span></td>
+      `;
+      body.appendChild(row);
+    }
+  }
+
+  async function refreshSiteHistory() {
+    const res = await fetch(withToken("/api/site-history?limit=30"));
+    if (!res.ok) return;
+    const data = await res.json();
+    renderHistoryRows(data.items || []);
+  }
+
+  async function checkSites() {
+    const res = await fetch(withToken("/api/site-check"));
+    if (!res.ok) return;
+    const data = await res.json();
+    renderSiteRows(data.results || []);
+    refreshSiteHistory();
   }
 
   async function refreshStatus() {
@@ -177,6 +306,14 @@
   }
 
   setInterval(refreshStatus, 3000);
+  setInterval(checkSites, 60000);
+
+  const siteCheckBtn = document.getElementById("site-check");
+  if (siteCheckBtn) {
+    siteCheckBtn.addEventListener("click", () => {
+      checkSites();
+    });
+  }
 
   const stopBtn = document.getElementById("service-stop");
   if (stopBtn) {
@@ -251,5 +388,8 @@
       if (out) out.textContent = "Limpo.";
     });
   }
+
+  checkSites();
+  refreshSiteHistory();
 </script>
 {% endblock %}
